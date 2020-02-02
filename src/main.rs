@@ -1,4 +1,45 @@
-use std::fmt;
+use ggez::{
+    conf::{WindowMode, WindowSetup},
+    event::{self, EventHandler},
+    graphics::{self, Color, DrawParam, FilterMode, Image},
+    mint::{Point2, Vector2},
+    Context, ContextBuilder, GameError, GameResult,
+};
+
+use std::{fmt, path::Path};
+
+struct GameState {
+    grid: Grid,
+    spritesheet: Vec<Image>,
+}
+
+impl EventHandler for GameState {
+    fn update(&mut self, ctx: &mut Context) -> GameResult<()> {
+        Ok(())
+    }
+
+    fn draw(&mut self, ctx: &mut Context) -> GameResult<()> {
+        graphics::clear(ctx, Color::new(60. / 255., 50. / 255., 83. / 255., 1.));
+
+        for y in 0..self.grid.height {
+            for x in 0..self.grid.width {
+                let sprite_params = DrawParam::new()
+                    .dest(Point2 {
+                        x: x as f32 * 16.,
+                        y: y as f32 * 16.,
+                    })
+                    .scale(Vector2 { x: 2., y: 2. });
+                graphics::draw(
+                    ctx,
+                    &self.spritesheet[self.grid.get(x, y).unwrap().sprite_index()],
+                    sprite_params,
+                )?;
+            }
+        }
+
+        graphics::present(ctx)
+    }
+}
 
 struct Grid {
     cells: Vec<Cell>,
@@ -143,6 +184,20 @@ impl Cell {
             y,
         }
     }
+
+    pub fn sprite_index(&self) -> usize {
+        match self.state {
+            CellState::Covered => 13,
+            CellState::Exposed => {
+                if self.has_mine {
+                    10
+                } else {
+                    self.neighboring_mines as usize
+                }
+            }
+            CellState::Flagged => 11,
+        }
+    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -175,9 +230,17 @@ impl fmt::Display for Cell {
     }
 }
 
-fn main() {
-    let width = 16;
-    let height = 16;
+fn main() -> Result<(), GameError> {
+    let (ref mut ctx, ref mut event_loop) = ContextBuilder::new("minesweeper", "")
+        .window_setup(WindowSetup::default().title("minesweeper"))
+        .window_mode(WindowMode::default().dimensions(640., 640.))
+        .add_resource_path("assets")
+        .build()
+        .unwrap();
+    let spritesheet = load_spritesheet(ctx, "/minesweeper.png", 8, 8, 4)?;
+
+    let width = 32;
+    let height = 32;
     let mut grid = Grid::new(width, height);
     for x in 0..width {
         for y in 0..height {
@@ -190,5 +253,52 @@ fn main() {
     grid.uncover(3, 3);
     grid.uncover(6, 8);
     grid.uncover(2, 12);
+    grid.uncover(24, 2);
+    grid.uncover(16, 8);
+    grid.uncover(19, 20);
     println!("{}", grid);
+
+    let state = &mut GameState { grid, spritesheet };
+    event::run(ctx, event_loop, state).unwrap();
+
+    Ok(())
+}
+
+fn load_spritesheet(
+    ctx: &mut Context,
+    path: &str,
+    sprite_width: usize,
+    sprite_height: usize,
+    horizontal_sprite_count: usize,
+) -> Result<Vec<Image>, GameError> {
+    let sprite_size = sprite_width * sprite_height;
+    let sprite_row_size = sprite_width * horizontal_sprite_count;
+
+    // Load and split image into a Vec of sprites
+    Ok(Image::new(ctx, Path::new(path))?
+        .to_rgba8(ctx)?
+        // Split pixel data into sprite rows
+        .chunks(sprite_size * horizontal_sprite_count * 4)
+        .flat_map(|row| {
+            row
+                // Split pixel data into sprite row cross-sections
+                .chunks(sprite_row_size)
+                .enumerate()
+                // Merge rows into sprite pixel data
+                .fold(
+                    vec![vec![]; horizontal_sprite_count],
+                    |mut sprites, (i, row)| {
+                        sprites[i % horizontal_sprite_count].extend_from_slice(row);
+                        sprites
+                    },
+                )
+        })
+        // Transform sprite pixel data into images
+        .map(|pixels| {
+            let mut sprite =
+                Image::from_rgba8(ctx, sprite_width as u16, sprite_height as u16, &pixels).unwrap();
+            sprite.set_filter(FilterMode::Nearest);
+            sprite
+        })
+        .collect::<Vec<Image>>())
 }
