@@ -58,6 +58,8 @@ const NEIGHBOR_OFFSETS: [(i32, i32); 8] = [
     (-1, 0),
 ];
 
+const SIDE_NEIGHBOR_OFFSETS: [(i32, i32); 4] = [(0, -1), (1, 0), (0, 1), (-1, 0)];
+
 impl Grid {
     pub fn new(width: i32, height: i32) -> Self {
         let mut grid = Grid {
@@ -79,14 +81,18 @@ impl Grid {
         self.cells[index].state = CellState::Exposed;
 
         // if the cell has no adjacent mines, uncover adjacent cells without adjacent mines
-        if self.cells[index].neighboring_mines == 0 {
-            for (i, j) in NEIGHBOR_OFFSETS.iter() {
-                let neighbor_index = self.coord_to_index(x + i, y + j).unwrap();
-                if self.cells[neighbor_index].state == CellState::Covered
-                    && self.cells[neighbor_index].neighboring_mines == 0
-                {
-                    self.uncover(x + i, y + j);
-                }
+        if self.cells[index].neighboring_mines == 0 && self.cells[index].has_mine == false {
+            for (i, j) in SIDE_NEIGHBOR_OFFSETS.iter() {
+                self.coord_to_index(x + i, y + j)
+                    .and_then(|neighbor_index| {
+                        Some(
+                            if self.cells[neighbor_index].state == CellState::Covered
+                                && self.cells[neighbor_index].has_mine == false
+                            {
+                                self.uncover(x + i, y + j);
+                            },
+                        )
+                    });
             }
         }
     }
@@ -108,24 +114,6 @@ impl Grid {
         neighbors
     }
 
-    pub fn set_neighbors(&mut self, x: i32, y: i32, f: &dyn Fn(i32, i32, &mut Cell)) {
-        for i in -1..2 {
-            for j in -1..2 {
-                if x == 0 && y == 0 {
-                    continue;
-                }
-                self.coord_to_index(x + i, y + j)
-                    .and_then(|index| Some(f(x + i, y + i, &mut self.cells[index])));
-            }
-        }
-    }
-
-    pub fn set(&mut self, x: i32, y: i32, cell: Cell) -> Option<Cell> {
-        let index = self.coord_to_index(x, y)?;
-        self.cells[index] = cell.clone();
-        Some(cell)
-    }
-
     fn place_mine(&mut self, x: i32, y: i32) {
         let index = self.coord_to_index(x, y).unwrap();
         self.cells[index].has_mine = true;
@@ -135,7 +123,15 @@ impl Grid {
             .filter(|cell| cell.has_mine)
             .collect::<Vec<&&Cell>>()
             .len() as u8;
-        self.set_neighbors(x, y, &|_, _, cell: &mut Cell| cell.neighboring_mines += 1);
+
+        // Update neighbor mine counts
+        for (i, j) in NEIGHBOR_OFFSETS.iter() {
+            if x == 0 && y == 0 {
+                continue;
+            }
+            self.coord_to_index(x + i, y + j)
+                .and_then(|index| Some(self.cells[index].neighboring_mines += 1));
+        }
     }
 
     /** Returns `None` if coord is out of bounds */
@@ -192,7 +188,11 @@ impl Cell {
                 if self.has_mine {
                     10
                 } else {
-                    self.neighboring_mines as usize
+                    if self.neighboring_mines == 0 {
+                        14
+                    } else {
+                        self.neighboring_mines as usize
+                    }
                 }
             }
             CellState::Flagged => 11,
@@ -233,7 +233,7 @@ impl fmt::Display for Cell {
 fn main() -> Result<(), GameError> {
     let (ref mut ctx, ref mut event_loop) = ContextBuilder::new("minesweeper", "")
         .window_setup(WindowSetup::default().title("minesweeper"))
-        .window_mode(WindowMode::default().dimensions(640., 640.))
+        .window_mode(WindowMode::default().dimensions(512., 512.))
         .add_resource_path("assets")
         .build()
         .unwrap();
@@ -244,18 +244,12 @@ fn main() -> Result<(), GameError> {
     let mut grid = Grid::new(width, height);
     for x in 0..width {
         for y in 0..height {
-            if rand::random::<f32>() > 0.7 {
+            if rand::random::<f32>() > 0.9 {
                 grid.place_mine(x, y);
             }
         }
     }
-    grid.get_neighbors(4, 4);
     grid.uncover(3, 3);
-    grid.uncover(6, 8);
-    grid.uncover(2, 12);
-    grid.uncover(24, 2);
-    grid.uncover(16, 8);
-    grid.uncover(19, 20);
     println!("{}", grid);
 
     let state = &mut GameState { grid, spritesheet };
