@@ -5,8 +5,11 @@ use ggez::{
     mint::{Point2, Vector2},
     Context, ContextBuilder, GameError, GameResult,
 };
+use winit::MouseButton;
 
 use std::{fmt, path::Path};
+
+const UI_SCALE: f32 = 4.0;
 
 struct GameState {
     grid: Grid,
@@ -14,8 +17,22 @@ struct GameState {
 }
 
 impl EventHandler for GameState {
-    fn update(&mut self, ctx: &mut Context) -> GameResult<()> {
+    fn update(&mut self, _ctx: &mut Context) -> GameResult<()> {
         Ok(())
+    }
+
+    fn mouse_button_down_event(&mut self, _ctx: &mut Context, button: MouseButton, x: f32, y: f32) {
+        let grid_x = (x / (8. * UI_SCALE)) as i32;
+        let grid_y = (y / (8. * UI_SCALE)) as i32;
+        match button {
+            MouseButton::Left => {
+                self.grid.uncover(grid_x, grid_y);
+            }
+            MouseButton::Right => {
+                self.grid.toggle_flag(grid_x, grid_y);
+            }
+            _ => {}
+        }
     }
 
     fn draw(&mut self, ctx: &mut Context) -> GameResult<()> {
@@ -25,10 +42,13 @@ impl EventHandler for GameState {
             for x in 0..self.grid.width {
                 let sprite_params = DrawParam::new()
                     .dest(Point2 {
-                        x: x as f32 * 16.,
-                        y: y as f32 * 16.,
+                        x: x as f32 * 8. * UI_SCALE,
+                        y: y as f32 * 8. * UI_SCALE,
                     })
-                    .scale(Vector2 { x: 2., y: 2. });
+                    .scale(Vector2 {
+                        x: UI_SCALE,
+                        y: UI_SCALE,
+                    });
                 graphics::draw(
                     ctx,
                     &self.spritesheet[self.grid.get(x, y).unwrap().sprite_index()],
@@ -80,6 +100,10 @@ impl Grid {
         let index = self.coord_to_index(x, y).unwrap();
         self.cells[index].state = CellState::Exposed;
 
+        if self.cells[index].has_mine == true {
+            self.uncover_bombs();
+        }
+
         // if the cell has no adjacent mines, uncover adjacent cells without adjacent mines
         if self.cells[index].neighboring_mines == 0 && self.cells[index].has_mine == false {
             for (i, j) in SIDE_NEIGHBOR_OFFSETS.iter() {
@@ -93,6 +117,26 @@ impl Grid {
                             },
                         )
                     });
+            }
+        }
+    }
+
+    pub fn toggle_flag(&mut self, x: i32, y: i32) {
+        let index = self.coord_to_index(x, y).unwrap();
+        match self.cells[index].state {
+            CellState::Flagged => self.cells[index].state = CellState::Covered,
+            CellState::Covered => self.cells[index].state = CellState::Flagged,
+            _ => {}
+        }
+    }
+
+    pub fn uncover_bombs(&mut self) {
+        for y in 0..self.height {
+            for x in 0..self.width {
+                let index = self.coord_to_index(x, y).unwrap();
+                if self.cells[index].has_mine == true {
+                    self.cells[index].state = CellState::Exposed;
+                }
             }
         }
     }
@@ -233,7 +277,7 @@ impl fmt::Display for Cell {
 fn main() -> Result<(), GameError> {
     let (ref mut ctx, ref mut event_loop) = ContextBuilder::new("minesweeper", "")
         .window_setup(WindowSetup::default().title("minesweeper"))
-        .window_mode(WindowMode::default().dimensions(512., 512.))
+        .window_mode(WindowMode::default().dimensions(256. * UI_SCALE, 256. * UI_SCALE))
         .add_resource_path("assets")
         .build()
         .unwrap();
@@ -244,13 +288,11 @@ fn main() -> Result<(), GameError> {
     let mut grid = Grid::new(width, height);
     for x in 0..width {
         for y in 0..height {
-            if rand::random::<f32>() > 0.9 {
+            if rand::random::<f32>() > 0.8 {
                 grid.place_mine(x, y);
             }
         }
     }
-    grid.uncover(3, 3);
-    println!("{}", grid);
 
     let state = &mut GameState { grid, spritesheet };
     event::run(ctx, event_loop, state).unwrap();
