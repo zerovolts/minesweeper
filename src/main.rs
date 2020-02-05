@@ -3,15 +3,35 @@ use ggez::{
     event::{self, EventHandler},
     graphics::{self, Color, DrawParam, FilterMode, Image},
     mint::{Point2, Vector2},
+    timer::time_since_start,
     Context, ContextBuilder, GameError, GameResult,
 };
 use winit::MouseButton;
 
-use std::{fmt, path::Path};
+use std::{fmt, path::Path, time::Duration};
 
 const UI_SCALE: f32 = 4.0;
 
+#[derive(PartialEq)]
+enum PlayState {
+    Unstarted,
+    Playing(Duration),
+    Won(Duration),
+    Lost(Duration),
+}
+
+enum BoardState {
+    InProgress,
+    Cleared,
+    Detonated,
+}
+
 struct GameState {
+    total_mines: i32,
+    total_flags: i32,
+    turns: i32,
+    play_state: PlayState,
+    // percent covered
     grid: Grid,
     spritesheet: Vec<Image>,
 }
@@ -21,15 +41,29 @@ impl EventHandler for GameState {
         Ok(())
     }
 
-    fn mouse_button_down_event(&mut self, _ctx: &mut Context, button: MouseButton, x: f32, y: f32) {
+    fn mouse_button_down_event(&mut self, ctx: &mut Context, button: MouseButton, x: f32, y: f32) {
         let grid_x = (x / (8. * UI_SCALE)) as i32;
-        let grid_y = (y / (8. * UI_SCALE)) as i32;
+        let grid_y = (y / (8. * UI_SCALE) - 3.) as i32;
         match button {
             MouseButton::Left => {
-                self.grid.uncover(grid_x, grid_y);
+                if y >= (24. * UI_SCALE) {
+                    if self.play_state == PlayState::Unstarted {
+                        self.play_state = PlayState::Playing(time_since_start(ctx));
+                    }
+                    match self.grid.uncover(grid_x, grid_y) {
+                        BoardState::InProgress => {}
+                        BoardState::Cleared => {
+                            self.play_state = PlayState::Won(time_since_start(ctx))
+                        }
+                        BoardState::Detonated => {
+                            self.play_state = PlayState::Lost(time_since_start(ctx))
+                        }
+                    };
+                    self.turns += 1;
+                }
             }
             MouseButton::Right => {
-                self.grid.toggle_flag(grid_x, grid_y);
+                self.total_flags += self.grid.toggle_flag(grid_x, grid_y);
             }
             _ => {}
         }
@@ -38,17 +72,83 @@ impl EventHandler for GameState {
     fn draw(&mut self, ctx: &mut Context) -> GameResult<()> {
         graphics::clear(ctx, Color::new(60. / 255., 50. / 255., 83. / 255., 1.));
 
+        // Set UI scale
+        let transform = DrawParam::new()
+            .scale(Vector2 {
+                x: UI_SCALE,
+                y: UI_SCALE,
+            })
+            .to_matrix();
+        graphics::set_transform(ctx, transform);
+        let _ = graphics::apply_transformations(ctx);
+
+        // Draw UI
+        let mut cursor_x = 1;
+        {
+            // Draw Turn Counter
+            let sprite_params = DrawParam::new().dest(Point2 {
+                x: cursor_x as f32 * 8.,
+                y: 1 as f32 * 8.,
+            });
+            graphics::draw(ctx, &self.spritesheet[15], sprite_params)?;
+            cursor_x += 1;
+            let seconds_since_start = match self.play_state {
+                PlayState::Won(end_time) => end_time.as_secs(),
+                PlayState::Lost(end_time) => end_time.as_secs(),
+                PlayState::Playing(start_time) => (time_since_start(ctx) - start_time).as_secs(),
+                PlayState::Unstarted => 0,
+            };
+            for sprite in number_to_sprites(seconds_since_start as i32) {
+                let sprite_params = DrawParam::new().dest(Point2 {
+                    x: cursor_x as f32 * 8.,
+                    y: 1 as f32 * 8.,
+                });
+                graphics::draw(ctx, &self.spritesheet[sprite as usize], sprite_params)?;
+                cursor_x += 1;
+            }
+
+            cursor_x += 1;
+            // Draw Flag Counter
+            let sprite_params = DrawParam::new().dest(Point2 {
+                x: cursor_x as f32 * 8.,
+                y: 1 as f32 * 8.,
+            });
+            graphics::draw(ctx, &self.spritesheet[11], sprite_params)?;
+            cursor_x += 1;
+            for sprite in number_to_sprites(self.total_flags) {
+                let sprite_params = DrawParam::new().dest(Point2 {
+                    x: cursor_x as f32 * 8.,
+                    y: 1 as f32 * 8.,
+                });
+                graphics::draw(ctx, &self.spritesheet[sprite as usize], sprite_params)?;
+                cursor_x += 1;
+            }
+
+            cursor_x += 1;
+            // Draw Mine Counter
+            let sprite_params = DrawParam::new().dest(Point2 {
+                x: cursor_x as f32 * 8.,
+                y: 1 as f32 * 8.,
+            });
+            graphics::draw(ctx, &self.spritesheet[10], sprite_params)?;
+            cursor_x += 1;
+            for sprite in number_to_sprites(self.total_mines) {
+                let sprite_params = DrawParam::new().dest(Point2 {
+                    x: cursor_x as f32 * 8.,
+                    y: 1 as f32 * 8.,
+                });
+                graphics::draw(ctx, &self.spritesheet[sprite as usize], sprite_params)?;
+                cursor_x += 1;
+            }
+        }
+
+        // Draw minefield
         for y in 0..self.grid.height {
             for x in 0..self.grid.width {
-                let sprite_params = DrawParam::new()
-                    .dest(Point2 {
-                        x: x as f32 * 8. * UI_SCALE,
-                        y: y as f32 * 8. * UI_SCALE,
-                    })
-                    .scale(Vector2 {
-                        x: UI_SCALE,
-                        y: UI_SCALE,
-                    });
+                let sprite_params = DrawParam::new().dest(Point2 {
+                    x: x as f32 * 8.,
+                    y: (y as f32 * 8. + 24.),
+                });
                 graphics::draw(
                     ctx,
                     &self.spritesheet[self.grid.get(x, y).unwrap().sprite_index()],
@@ -78,8 +178,6 @@ const NEIGHBOR_OFFSETS: [(i32, i32); 8] = [
     (-1, 0),
 ];
 
-const SIDE_NEIGHBOR_OFFSETS: [(i32, i32); 4] = [(0, -1), (1, 0), (0, 1), (-1, 0)];
-
 impl Grid {
     pub fn new(width: i32, height: i32) -> Self {
         let mut grid = Grid {
@@ -96,17 +194,18 @@ impl Grid {
         grid
     }
 
-    pub fn uncover(&mut self, x: i32, y: i32) {
+    pub fn uncover(&mut self, x: i32, y: i32) -> BoardState {
         let index = self.coord_to_index(x, y).unwrap();
         self.cells[index].state = CellState::Exposed;
 
         if self.cells[index].has_mine == true {
             self.uncover_bombs();
+            return BoardState::Detonated;
         }
 
         // if the cell has no adjacent mines, uncover adjacent cells without adjacent mines
         if self.cells[index].neighboring_mines == 0 && self.cells[index].has_mine == false {
-            for (i, j) in SIDE_NEIGHBOR_OFFSETS.iter() {
+            for (i, j) in NEIGHBOR_OFFSETS.iter() {
                 self.coord_to_index(x + i, y + j)
                     .and_then(|neighbor_index| {
                         Some(
@@ -119,14 +218,21 @@ impl Grid {
                     });
             }
         }
+        BoardState::InProgress
     }
 
-    pub fn toggle_flag(&mut self, x: i32, y: i32) {
+    pub fn toggle_flag(&mut self, x: i32, y: i32) -> i32 {
         let index = self.coord_to_index(x, y).unwrap();
         match self.cells[index].state {
-            CellState::Flagged => self.cells[index].state = CellState::Covered,
-            CellState::Covered => self.cells[index].state = CellState::Flagged,
-            _ => {}
+            CellState::Flagged => {
+                self.cells[index].state = CellState::Covered;
+                -1
+            }
+            CellState::Covered => {
+                self.cells[index].state = CellState::Flagged;
+                1
+            }
+            _ => 0,
         }
     }
 
@@ -277,7 +383,7 @@ impl fmt::Display for Cell {
 fn main() -> Result<(), GameError> {
     let (ref mut ctx, ref mut event_loop) = ContextBuilder::new("minesweeper", "")
         .window_setup(WindowSetup::default().title("minesweeper"))
-        .window_mode(WindowMode::default().dimensions(256. * UI_SCALE, 256. * UI_SCALE))
+        .window_mode(WindowMode::default().dimensions(256. * UI_SCALE, (256. + 24.0) * UI_SCALE))
         .add_resource_path("assets")
         .build()
         .unwrap();
@@ -286,15 +392,26 @@ fn main() -> Result<(), GameError> {
     let width = 32;
     let height = 32;
     let mut grid = Grid::new(width, height);
+    let mut mine_count = 0;
     for x in 0..width {
         for y in 0..height {
             if rand::random::<f32>() > 0.8 {
+                // TODO: Mines can spawn on the same position and the count
+                // would become incorrect
                 grid.place_mine(x, y);
+                mine_count += 1;
             }
         }
     }
 
-    let state = &mut GameState { grid, spritesheet };
+    let state = &mut GameState {
+        grid,
+        spritesheet,
+        total_mines: mine_count,
+        total_flags: 0,
+        play_state: PlayState::Unstarted,
+        turns: 0,
+    };
     event::run(ctx, event_loop, state).unwrap();
 
     Ok(())
@@ -337,4 +454,11 @@ fn load_spritesheet(
             sprite
         })
         .collect::<Vec<Image>>())
+}
+
+fn number_to_sprites(x: i32) -> Vec<u8> {
+    x.to_string()
+        .chars()
+        .map(|digit| digit.to_string().parse::<u8>().unwrap())
+        .collect::<Vec<u8>>()
 }
