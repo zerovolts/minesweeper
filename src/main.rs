@@ -395,7 +395,7 @@ fn main() -> Result<(), GameError> {
     let mut mine_count = 0;
     for x in 0..width {
         for y in 0..height {
-            if rand::random::<f32>() > 0.8 {
+            if rand::random::<f32>() > 0.85 {
                 // TODO: Mines can spawn on the same position and the count
                 // would become incorrect
                 grid.place_mine(x, y);
